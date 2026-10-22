@@ -25,9 +25,27 @@ let liveState: TikTokLiveState = {
 };
 
 let tiktokConnection: any = null;
+
+// Settings chosen in the panel that the OBS overlay must also use (print triggers, plotter sound)
+let sharedSettings: Record<string, any> = {};
 const sseClients: Response[] = [];
 
 // Broadcast an event to all connected SSE browser clients (console + OBS overlays)
+// Profile photo URL across legacy (profilePictureUrl) and v2 proto (avatarThumb.urlList) user shapes
+function getAvatarUrl(u: any, data: any): string {
+  return (
+    u?.profilePictureUrl ||
+    u?.profilePicture?.url?.[0] ||
+    u?.avatarLarge?.urlList?.[0] ||
+    u?.avatarMedium?.urlList?.[0] ||
+    u?.avatarThumb?.urlList?.[0] ||
+    u?.profilePictureUrls?.[0] ||
+    data?.profilePictureUrl ||
+    data?.userDetails?.profilePictureUrls?.[0] ||
+    ''
+  );
+}
+
 function broadcastSSE(type: string, data: any) {
   const payload = `data: ${JSON.stringify({ type, data })}\n\n`;
   for (let i = sseClients.length - 1; i >= 0; i--) {
@@ -150,6 +168,17 @@ async function startServer() {
     res.json(liveState);
   });
 
+  // Shared settings (print triggers, plotter sound), synced between panel and overlay
+  app.get('/api/shared-settings', (_req: Request, res: Response) => {
+    res.json(sharedSettings);
+  });
+
+  app.post('/api/shared-settings', (req: Request, res: Response) => {
+    sharedSettings = { ...sharedSettings, ...(req.body || {}) };
+    broadcastSSE('shared-settings', sharedSettings);
+    res.json({ success: true });
+  });
+
   // 4. Connect to TikTok Live
   app.post('/api/tiktok/connect', async (req: Request, res: Response) => {
     let { username } = req.body;
@@ -222,12 +251,7 @@ async function startServer() {
       // Capture live chat messages for team voting, user affiliation & "yo" detection
       conn.on(WebcastEvent.CHAT || 'chat', (data: any) => {
         const u = data.user || data;
-        const rawAvatar =
-          u.profilePictureUrl ||
-          u.profilePictureUrls?.[0] ||
-          data.profilePictureUrl ||
-          (data.userDetails?.profilePictureUrls && data.userDetails.profilePictureUrls[0]) ||
-          '';
+        const rawAvatar = getAvatarUrl(u, data);
 
         const safeAvatar = rawAvatar
           ? `/api/proxy-image?url=${encodeURIComponent(rawAvatar)}`
@@ -253,15 +277,7 @@ async function startServer() {
       // Capture viewers joining the live (used to print their profile photo)
       conn.on(WebcastEvent.MEMBER || 'member', (data: any) => {
         const u = data.user || data;
-        const rawAvatar =
-          u.profilePictureUrl ||
-          u.profilePicture?.url?.[0] ||
-          u.avatarLarge?.urlList?.[0] ||
-          u.avatarMedium?.urlList?.[0] ||
-          u.avatarThumb?.urlList?.[0] ||
-          u.profilePictureUrls?.[0] ||
-          data.profilePictureUrl ||
-          '';
+        const rawAvatar = getAvatarUrl(u, data);
 
         const safeAvatar = rawAvatar
           ? `/api/proxy-image?url=${encodeURIComponent(rawAvatar)}`
@@ -281,12 +297,7 @@ async function startServer() {
       // Capture real TikTok Live likes (screen tap hearts ❤️)
       conn.on(WebcastEvent.LIKE || 'like', (data: any) => {
         const u = data.user || data;
-        const rawAvatar =
-          u.profilePictureUrl ||
-          u.profilePictureUrls?.[0] ||
-          data.profilePictureUrl ||
-          (data.userDetails?.profilePictureUrls && data.userDetails.profilePictureUrls[0]) ||
-          '';
+        const rawAvatar = getAvatarUrl(u, data);
 
         const safeAvatar = rawAvatar
           ? `/api/proxy-image?url=${encodeURIComponent(rawAvatar)}`
@@ -318,12 +329,7 @@ async function startServer() {
         const u = data.user || data;
         const g = data.gift || data;
 
-        const rawAvatar =
-          u.profilePictureUrl ||
-          u.profilePictureUrls?.[0] ||
-          data.profilePictureUrl ||
-          (data.userDetails?.profilePictureUrls && data.userDetails.profilePictureUrls[0]) ||
-          '';
+        const rawAvatar = getAvatarUrl(u, data);
 
         // Route through our CORS-safe image proxy
         const safeAvatar = rawAvatar

@@ -1,5 +1,17 @@
 import React, { useState } from 'react';
-import { DonorItem, GiftTier, PRESET_GIFTS, StreamSettings } from '../types/tiktok';
+import {
+  DonorItem,
+  GiftTier,
+  StreamSettings,
+  TierTrigger,
+  TriggerMode,
+  TIKTOK_GIFTS,
+  TIER_PRIORITY,
+  findTikTokGift,
+  describeTrigger,
+  PLOTTER_SOUNDS,
+} from '../types/tiktok';
+import { soundEngine } from '../utils/audio';
 import { PRESET_AVATARS } from '../utils/avatarPresets';
 import {
   Heart,
@@ -25,7 +37,13 @@ import {
 interface StreamerConsoleProps {
   settings: StreamSettings;
   onUpdateSettings: (newSettings: Partial<StreamSettings>) => void;
-  onTriggerGift: (tier: GiftTier, customName?: string, customAvatar?: string, customComment?: string) => void;
+  onTriggerGift: (
+    tier: GiftTier,
+    customName?: string,
+    customAvatar?: string,
+    customComment?: string,
+    customIcon?: string
+  ) => void;
   onClearQueue: () => void;
   recentDonors: DonorItem[];
   isTikTokConnected: boolean;
@@ -35,6 +53,48 @@ interface StreamerConsoleProps {
   totalLikesCount?: number;
   onSimulateLikes?: (count?: number) => void;
 }
+
+const TIER_CARDS: {
+  tier: GiftTier;
+  title: string;
+  boxClass: string;
+  iconClass: string;
+  badgeClass: string;
+  buttonClass: string;
+}[] = [
+  {
+    tier: 'heart',
+    title: 'Peque B/N',
+    boxClass: 'border border-slate-700 bg-slate-800/90',
+    iconClass: 'bg-slate-900 border-slate-700',
+    badgeClass: 'bg-slate-900 text-slate-300 border border-slate-700',
+    buttonClass: 'bg-slate-700 text-white hover:bg-slate-600',
+  },
+  {
+    tier: 'flower',
+    title: 'Peque Color',
+    boxClass: 'border border-pink-900/60 bg-gradient-to-br from-pink-950/40 to-slate-800',
+    iconClass: 'bg-pink-900/50 border-pink-700/50',
+    badgeClass: 'bg-pink-950 text-pink-300 border border-pink-700/60',
+    buttonClass: 'bg-pink-600/60 border border-pink-500/40 text-pink-100 hover:bg-pink-600',
+  },
+  {
+    tier: 'donut',
+    title: 'Mediano',
+    boxClass: 'border border-rose-900/60 bg-gradient-to-br from-rose-950/40 to-slate-800',
+    iconClass: 'bg-rose-900/50 border-rose-700/50',
+    badgeClass: 'bg-rose-950 text-rose-300 border border-rose-700/60',
+    buttonClass: 'bg-rose-600/60 border border-rose-500/40 text-rose-100 hover:bg-rose-600',
+  },
+  {
+    tier: 'big_gift',
+    title: 'Grande',
+    boxClass: 'border-2 border-yellow-500/80 bg-gradient-to-br from-amber-950/60 via-yellow-900/40 to-slate-800',
+    iconClass: 'bg-yellow-500/20 border-yellow-500/60',
+    badgeClass: 'bg-yellow-500 text-slate-950 font-black',
+    buttonClass: 'bg-yellow-500 text-slate-950 font-black hover:bg-yellow-400 shadow',
+  },
+];
 
 export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
   settings,
@@ -54,10 +114,6 @@ export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
   const [customComment, setCustomComment] = useState('¡Hola streamer! Aquí mi donación ❤️');
   const [selectedAvatar, setSelectedAvatar] = useState(PRESET_AVATARS[0].dataUrl);
   const [copiedObsLink, setCopiedObsLink] = useState(false);
-  const [selectedGiftSlot1, setSelectedGiftSlot1] = useState('yo');
-  const [selectedGiftSlot2, setSelectedGiftSlot2] = useState('Flor');
-  const [selectedGiftSlot3, setSelectedGiftSlot3] = useState('Corazoncito Coreano');
-  const [selectedGiftSlot4, setSelectedGiftSlot4] = useState('Rosquilla / VIP');
 
   const handleCopyObsLink = () => {
     const url = `${window.location.origin}${window.location.pathname}?overlay=1`;
@@ -187,9 +243,7 @@ export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
               <span className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-rose-400 inline-block"></span>
                 <span>
-                  {settings.drawOnLikes !== false
-                    ? `Likes de pantalla: Dibuja cada ${settings.likesThreshold || 10} toques ❤️`
-                    : 'Likes de pantalla: Desactivados (solo regalos)'}
+                  {TIER_PRIORITY.map((t) => describeTrigger(t, settings.tierTriggers[t])).join(' · ')}
                 </span>
               </span>
               <span className="text-amber-300 font-semibold">🎁 Regalos: Al instante</span>
@@ -256,163 +310,93 @@ export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
                 Configuración de Escucha y Disparadores (4 Niveles)
               </p>
               <div className="grid grid-cols-2 gap-3">
-                {/* 1. PEQUEÑO NEGRO (CHAT / TEXTO) */}
-                <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800/90 p-3.5 shadow-md">
-                  <div className="flex w-full items-center justify-between">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xl border border-slate-700">
-                      💬
-                    </span>
-                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-slate-300 border border-slate-700">
-                      Pequeño Negro (B&N)
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    <div>
-                      <div className="font-bold text-white text-xs">Chat / Palabra clave</div>
-                      <select
-                        value={selectedGiftSlot1}
-                        onChange={(e) => setSelectedGiftSlot1(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-slate-500"
-                      >
-                        <option value="yo">Escribir "yo"</option>
-                        <option value="hola">Escribir "hola"</option>
-                        <option value="gg">Escribir "gg"</option>
-                        <option value="dibujo">Escribir "dibujo"</option>
-                      </select>
-                    </div>
-                    <button
-                      onClick={() => onTriggerGift('heart', 'fan_chat', undefined, `💬 Escribió "${selectedGiftSlot1}"`)}
-                      className="w-full rounded-xl bg-slate-700 py-1.5 text-xs font-bold text-white hover:bg-slate-600 transition-all active:scale-95"
-                    >
-                      Probar Disparo B&N
-                    </button>
-                  </div>
-                </div>
+                {TIER_CARDS.map((card) => {
+                  const trigger = settings.tierTriggers[card.tier];
+                  const gift = findTikTokGift(trigger.giftName);
+                  const icon = trigger.mode === 'likes' ? '❤️' : trigger.mode === 'text' ? '💬' : gift?.icon || '🎁';
+                  const updateTrigger = (patch: Partial<TierTrigger>) =>
+                    onUpdateSettings({
+                      tierTriggers: { ...settings.tierTriggers, [card.tier]: { ...trigger, ...patch } },
+                    });
+                  const testComment =
+                    trigger.mode === 'likes'
+                      ? `❤️ ${trigger.likes} likes en pantalla`
+                      : trigger.mode === 'text'
+                      ? `💬 Escribió "${trigger.text}"`
+                      : `${gift?.icon || '🎁'} ${gift?.label || trigger.giftName}`;
 
-                {/* 2. PEQUEÑO COLOR (FLOR / REGALO 1) */}
-                <div className="flex flex-col rounded-2xl border border-pink-900/60 bg-gradient-to-br from-pink-950/40 to-slate-800 p-3.5 shadow-md">
-                  <div className="flex w-full items-center justify-between">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-pink-900/50 text-xl border border-pink-700/50">
-                      🌸
-                    </span>
-                    <span className="rounded-full bg-pink-950 px-2 py-0.5 text-[10px] font-bold text-pink-300 border border-pink-700/60">
-                      Pequeño Color
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    <div>
-                      <div className="font-bold text-white text-xs">Regalo (1 Moneda)</div>
-                      <select
-                        value={selectedGiftSlot2}
-                        onChange={(e) => setSelectedGiftSlot2(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-pink-900 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-pink-500"
-                      >
-                        <option value="Flor">Flor (1 moneda)</option>
-                        <option value="Rosa">Rosa (1 moneda)</option>
-                        <option value="Girasol">Girasol (1 moneda)</option>
-                      </select>
-                    </div>
-                    <button
-                      onClick={() => onTriggerGift('flower', 'fan_flor', undefined, `🌸 Regalo ${selectedGiftSlot2}`)}
-                      className="w-full rounded-xl bg-pink-600/60 border border-pink-500/40 py-1.5 text-xs font-bold text-pink-100 hover:bg-pink-600 transition-all active:scale-95"
-                    >
-                      Probar Flor
-                    </button>
-                  </div>
-                </div>
+                  return (
+                    <div key={card.tier} className={`flex flex-col rounded-2xl p-3.5 shadow-md ${card.boxClass}`}>
+                      <div className="flex w-full items-center justify-between">
+                        <span className={`flex h-9 w-9 items-center justify-center rounded-xl text-xl border ${card.iconClass}`}>
+                          {icon}
+                        </span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${card.badgeClass}`}>
+                          {card.title}
+                        </span>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        <select
+                          value={trigger.mode}
+                          onChange={(e) => updateTrigger({ mode: e.target.value as TriggerMode })}
+                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-slate-500"
+                        >
+                          <option value="likes">❤️ Corazones (likes)</option>
+                          {card.tier === 'heart' && <option value="text">💬 Texto en el chat</option>}
+                          <option value="gift">🎁 Regalo de TikTok</option>
+                        </select>
 
-                {/* 3. MEDIANO COLOR (CORAZONCITO / REGALO 2) */}
-                <div className="flex flex-col rounded-2xl border border-rose-900/60 bg-gradient-to-br from-rose-950/40 to-slate-800 p-3.5 shadow-md">
-                  <div className="flex w-full items-center justify-between">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-900/50 text-xl border border-rose-700/50">
-                      🫰
-                    </span>
-                    <span className="rounded-full bg-rose-950 px-2 py-0.5 text-[10px] font-bold text-rose-300 border border-rose-700/60">
-                      Mediano Color
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    <div>
-                      <div className="font-bold text-white text-xs">Regalo (5 Monedas)</div>
-                      <select
-                        value={selectedGiftSlot3}
-                        onChange={(e) => setSelectedGiftSlot3(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-rose-900 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-rose-500"
-                      >
-                        <option value="Corazoncito Coreano">Corazoncito Coreano (5)</option>
-                        <option value="Gafas de sol">Gafas de sol (5)</option>
-                        <option value="Perfume">Perfume (5)</option>
-                      </select>
-                    </div>
-                    <button
-                      onClick={() => onTriggerGift('donut', 'fan_coreano', undefined, `🫰 Regalo ${selectedGiftSlot3}`)}
-                      className="w-full rounded-xl bg-rose-600/60 border border-rose-500/40 py-1.5 text-xs font-bold text-rose-100 hover:bg-rose-600 transition-all active:scale-95"
-                    >
-                      Probar Mediano
-                    </button>
-                  </div>
-                </div>
+                        {trigger.mode === 'likes' && (
+                          <label className="flex items-center gap-2 text-xs text-slate-300">
+                            <span>Mínimo</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={trigger.likes}
+                              onChange={(e) => updateTrigger({ likes: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-16 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none"
+                            />
+                            <span>❤️</span>
+                          </label>
+                        )}
+                        {trigger.mode === 'text' && (
+                          <input
+                            type="text"
+                            value={trigger.text}
+                            onChange={(e) => updateTrigger({ text: e.target.value })}
+                            placeholder='Ej: yo'
+                            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none"
+                          />
+                        )}
+                        {trigger.mode === 'gift' && (
+                          <select
+                            value={trigger.giftName}
+                            onChange={(e) => updateTrigger({ giftName: e.target.value })}
+                            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none"
+                          >
+                            {TIKTOK_GIFTS.map((g) => (
+                              <option key={g.name} value={g.name}>
+                                {g.icon} {g.label} ({g.coins})
+                              </option>
+                            ))}
+                          </select>
+                        )}
 
-                {/* 4. GRANDE / GOOT (ROSQUILLA / VIP / REGALO 3) */}
-                <div className="flex flex-col rounded-2xl border-2 border-yellow-500/80 bg-gradient-to-br from-amber-950/60 via-yellow-900/40 to-slate-800 p-3.5 shadow-lg">
-                  <div className="flex w-full items-center justify-between">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-yellow-500/20 text-xl border border-yellow-500/60">
-                      🍩
-                    </span>
-                    <span className="rounded-full bg-yellow-500 px-2 py-0.5 text-[10px] font-black text-slate-950">
-                      Grande + GOOT
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    <div>
-                      <div className="font-bold text-amber-200 text-xs">Regalo (30 Monedas)</div>
-                      <select
-                        value={selectedGiftSlot4}
-                        onChange={(e) => setSelectedGiftSlot4(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-yellow-500/60 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-yellow-400"
-                      >
-                        <option value="Rosquilla / VIP">Rosquilla / VIP (30+)</option>
-                        <option value="León">León (29999+)</option>
-                        <option value="Universo">Universo (34999+)</option>
-                      </select>
+                        <button
+                          onClick={() =>
+                            trigger.mode === 'likes' && onSimulateLikes
+                              ? onSimulateLikes(trigger.likes)
+                              : onTriggerGift(card.tier, undefined, undefined, testComment, icon)
+                          }
+                          className={`w-full rounded-xl py-1.5 text-xs font-bold transition-all active:scale-95 ${card.buttonClass}`}
+                        >
+                          Probar {card.title}
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => onTriggerGift('big_gift', 'fan_rosquilla', undefined, `🍩 Regalo ${selectedGiftSlot4}`)}
-                      className="w-full rounded-xl bg-yellow-500 py-1.5 text-xs font-black text-slate-950 hover:bg-yellow-400 transition-all active:scale-95 shadow"
-                    >
-                      Probar Grande
-                    </button>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            </div>
-
-            {/* Quick Screen Likes Simulator */}
-            <div className="rounded-2xl border border-rose-500/30 bg-rose-950/30 p-3.5 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-bold text-rose-200 flex items-center gap-1.5">
-                  <Heart className="h-3.5 w-3.5 text-rose-500 fill-rose-500" />
-                  <span>Probar Taps de Pantalla (Likes gratuitos)</span>
-                </div>
-                <div className="text-[11px] text-rose-300/70">
-                  Simula un espectador dando {settings.likesThreshold || 10} toques a la pantalla
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  onSimulateLikes
-                    ? onSimulateLikes(settings.likesThreshold || 10)
-                    : onTriggerGift(
-                        'heart',
-                        'fan_taps',
-                        undefined,
-                        `❤️ ${settings.likesThreshold || 10} likes en pantalla`
-                      )
-                }
-                className="shrink-0 flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-600/30 px-3 py-2 text-xs font-bold text-rose-200 hover:bg-rose-600/50 transition-all active:scale-95"
-              >
-                <span>+ {settings.likesThreshold || 10} Likes ❤️</span>
-              </button>
             </div>
           </div>
         )}
@@ -530,65 +514,6 @@ export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
               </div>
             </div>
 
-            {/* LIKES & CORAZONES DE PANTALLA CONFIGURATION */}
-            <div className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-1.5 text-sm font-bold text-rose-200">
-                    <Heart className="h-4 w-4 text-rose-500 fill-rose-500" />
-                    <span>Dibujar con Likes de Pantalla (Taps ❤️)</span>
-                  </div>
-                  <div className="text-xs text-rose-300/80">
-                    Dibuja la foto del espectador cuando toca la pantalla de TikTok
-                  </div>
-                </div>
-                <button
-                  onClick={() =>
-                    onUpdateSettings({
-                      drawOnLikes: settings.drawOnLikes === false ? true : false,
-                    })
-                  }
-                  className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
-                    settings.drawOnLikes !== false
-                      ? 'bg-rose-500 text-white shadow-sm'
-                      : 'bg-slate-800 text-slate-400'
-                  }`}
-                >
-                  {settings.drawOnLikes !== false ? 'Activado' : 'Desactivado'}
-                </button>
-              </div>
-
-              {settings.drawOnLikes !== false && (
-                <div className="pt-2 border-t border-rose-900/40">
-                  <div className="flex items-center justify-between text-xs text-slate-300 mb-2">
-                    <span>Likes requeridos por espectador para dibujar foto:</span>
-                    <span className="font-mono font-bold text-rose-400">
-                      {settings.likesThreshold || 10} likes
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {[1, 5, 10, 15, 25].map((val) => (
-                      <button
-                        key={val}
-                        onClick={() => onUpdateSettings({ likesThreshold: val })}
-                        className={`rounded-lg py-1.5 text-xs font-bold transition-all ${
-                          (settings.likesThreshold || 10) === val
-                            ? 'bg-rose-600 text-white border border-rose-400 shadow'
-                            : 'bg-slate-900/90 text-slate-300 border border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        {val === 1 ? '1 tap' : `${val} ❤️`}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-[10px] text-slate-400">
-                    💡 Recomendado: 10 o 15 likes. Fomenta que la gente toque repetidamente tu directo en TikTok y suba tu interacción antes de que su avatar se dibuje.
-                  </p>
-                </div>
-              )}
-            </div>
-
             {/* Audio Toggle & Volume */}
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -622,6 +547,61 @@ export const StreamerConsole: React.FC<StreamerConsoleProps> = ({
                     className="w-full accent-emerald-500 cursor-pointer"
                   />
                 </div>
+              )}
+            </div>
+
+            {/* Plotter drawing sound picker */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-200">Sonido del Plotter al Dibujar 🖨️</div>
+                <div className="text-xs text-slate-400">Elige el sonido que hace la impresora mientras dibuja</div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {PLOTTER_SOUNDS.map((sound) => (
+                  <button
+                    key={sound.id}
+                    title={sound.description}
+                    onClick={() => {
+                      onUpdateSettings({ plotterSound: sound.id });
+                      soundEngine.setPlotterSound(sound.id);
+                      soundEngine.previewDrawingSound();
+                    }}
+                    className={`rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition-all ${
+                      settings.plotterSound === sound.id
+                        ? 'bg-cyan-600 text-white border border-cyan-400 shadow'
+                        : 'bg-slate-900/90 text-slate-300 border border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    {sound.label}
+                  </button>
+                ))}
+              </div>
+              {settings.plotterSound !== 'off' && (
+                <div>
+                  <div className="flex justify-between text-xs text-slate-400 mb-1">
+                    <span>Volumen del plotter</span>
+                    <span className="font-mono">{Math.round(settings.plotterVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={settings.plotterVolume}
+                    onChange={(e) => onUpdateSettings({ plotterVolume: Number(e.target.value) })}
+                    onPointerUp={() => soundEngine.previewDrawingSound()}
+                    className="w-full accent-cyan-500 cursor-pointer"
+                  />
+                </div>
+              )}
+              <button
+                onClick={() => soundEngine.previewDrawingSound()}
+                className="w-full rounded-xl border border-cyan-500/40 bg-cyan-600/20 py-1.5 text-xs font-bold text-cyan-200 hover:bg-cyan-600/40 transition-all active:scale-95"
+              >
+                ▶ Escuchar sonido
+              </button>
+              {!settings.soundEnabled && (
+                <p className="text-[10px] text-amber-300">Los sonidos están en silencio: actívalos arriba para escucharlo.</p>
               )}
             </div>
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { DonorItem, GiftTier } from '../types/tiktok';
+import { DonorItem, GiftTier, TierTriggers, TIER_PRIORITY, describeTrigger } from '../types/tiktok';
 import { prepareImageForDrawing, renderSketchFrame, PreparedDrawingData } from '../utils/drawingEngine';
 import { soundEngine } from '../utils/audio';
 import { PlotterCarriage } from './PlotterCarriage';
@@ -29,6 +29,7 @@ interface ContinuousPrinterProps {
   onDrawingComplete: (donor: DonorItem, finalDataUrl: string) => void;
   completedRows: PaperRow[]; // rows that have been completed and rolled down
   obsMode: boolean;
+  tierTriggers: TierTriggers;
 }
 
 /**
@@ -58,6 +59,7 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
   onDrawingComplete,
   completedRows,
   obsMode,
+  tierTriggers,
 }) => {
   const chassisRef = useRef<HTMLDivElement | null>(null);
   const gantryRef = useRef<HTMLDivElement | null>(null);
@@ -71,6 +73,7 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
   const preparedRef = useRef<PreparedDrawingData | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
+  const stopPrintSoundRef = useRef<(() => void) | null>(null);
 
   // Exact 2.0s duration requirement
   const DRAW_DURATION_MS = 2000;
@@ -150,6 +153,7 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
         (prepared) => {
           if (isCancelled) return;
           preparedRef.current = prepared;
+          stopPrintSoundRef.current = soundEngine.startDrawingSound(DRAW_DURATION_MS);
 
           // Pre-align pen carriage to the start position of the drawing
           if (chassisRef.current && activeCanvasRef.current) {
@@ -174,10 +178,6 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
             const elapsed = timestamp - startTimeRef.current;
             const currentProg = Math.min(1, elapsed / DRAW_DURATION_MS);
             setDrawProgress(currentProg);
-
-            if (elapsed % 180 < 25) {
-              soundEngine.playPencilScratch();
-            }
 
             if (activeCanvasRef.current && preparedRef.current) {
               const ctx = activeCanvasRef.current.getContext('2d');
@@ -256,6 +256,8 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
 
     return () => {
       isCancelled = true;
+      stopPrintSoundRef.current?.();
+      stopPrintSoundRef.current = null;
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
@@ -264,66 +266,22 @@ export const ContinuousPrinter: React.FC<ContinuousPrinterProps> = ({
 
   return (
     <div className="relative flex flex-col xl:flex-row items-center xl:items-start justify-center h-full w-full gap-5 select-none p-2">
-      {/* Left-side semi-transparent Gift Guide / Legend panel */}
-      {!obsMode && (
-        <div className="hidden xl:flex flex-col w-72 rounded-3xl border border-slate-700/80 bg-slate-950/70 p-4 shadow-xl backdrop-blur-md space-y-3 shrink-0">
-          <div className="text-xs font-black text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
-            <span>🎁 Guía de Regalos y Chat</span>
-          </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            Lo que tus espectadores deben donar o escribir para activar el plotter en vivo:
-          </p>
-
-          <div className="space-y-2.5">
-            {/* 1. PEQUEÑO NEGRO */}
-            <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-2.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-lg border border-slate-700">
-                💬
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-bold text-white truncate">Chat "yo" (B&N)</div>
-                <div className="text-[10px] text-slate-400">Dibuja avatar en Blanco y Negro</div>
-              </div>
-            </div>
-
-            {/* 2. PEQUEÑO COLOR */}
-            <div className="flex items-center gap-3 rounded-2xl border border-pink-900/40 bg-pink-950/30 p-2.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-pink-900/50 text-lg border border-pink-700/40">
-                🌸
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-bold text-pink-200 truncate">Flor (1 Moneda)</div>
-                <div className="text-[10px] text-pink-300/70">Dibuja a Color Pequeño (2s)</div>
-              </div>
-            </div>
-
-            {/* 3. MEDIANO COLOR */}
-            <div className="flex items-center gap-3 rounded-2xl border border-rose-900/40 bg-rose-950/30 p-2.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-900/50 text-lg border border-rose-700/40">
-                🫰
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-bold text-rose-200 truncate">Corazoncito (5 Monedas)</div>
-                <div className="text-[10px] text-rose-300/70">Dibuja a Color Mediano (2s)</div>
-              </div>
-            </div>
-
-            {/* 4. GRANDE + GOOT */}
-            <div className="flex items-center gap-3 rounded-2xl border border-yellow-500/40 bg-amber-950/40 p-2.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-yellow-500/20 text-lg border border-yellow-500/50">
-                🍩
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-bold text-amber-200 truncate">Rosquilla / VIP (30)</div>
-                <div className="text-[10px] text-yellow-300/80">Mitad de página + Sello GOOT</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Main Column (Perspective toggle + Printer Chassis) */}
-      <div className="flex flex-col items-center justify-start w-full max-w-[430px]">
+      <div className="relative flex flex-col items-center justify-start w-full max-w-[430px]">
+
+        {/* Semi-transparent legend floating over the bottom of the printer */}
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 flex flex-col w-56 rounded-2xl border border-white/15 bg-slate-950/35 p-3 backdrop-blur-[2px] space-y-1.5">
+          {TIER_PRIORITY.slice()
+            .reverse()
+            .map((tier) => (
+              <div
+                key={tier}
+                className="rounded-xl bg-white/10 px-2.5 py-1.5 text-xs font-bold text-white drop-shadow"
+              >
+                {describeTrigger(tier, tierTriggers[tier])}
+              </div>
+            ))}
+        </div>
         {!obsMode && (
           <div className="mb-2 flex items-center justify-end w-full px-2 text-xs">
             <button

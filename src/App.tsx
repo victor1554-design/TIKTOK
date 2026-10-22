@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { DonorItem, GiftTier, PRESET_GIFTS, StreamSettings } from './types/tiktok';
+import {
+  DonorItem,
+  GiftTier,
+  PRESET_GIFTS,
+  StreamSettings,
+  TierTriggers,
+  DEFAULT_TIER_TRIGGERS,
+  TIER_PRIORITY,
+  findTikTokGift,
+  triggerCaption,
+} from './types/tiktok';
 import { PRESET_AVATARS } from './utils/avatarPresets';
 import { soundEngine } from './utils/audio';
 import { ContinuousPrinter, PaperRow, PrintedItem, PaperRowType } from './components/ContinuousPrinter';
@@ -10,6 +20,9 @@ import { ObsGuideModal } from './components/ObsGuideModal';
 import { AppSelector, ActiveAppId } from './components/AppSelector';
 import { SoccerBattleApp } from './components/soccer/SoccerBattleApp';
 import { Sparkles } from 'lucide-react';
+
+// Settings the OBS overlay (separate browser) must mirror from the panel
+const SHARED_SETTING_KEYS: (keyof StreamSettings)[] = ['tierTriggers', 'plotterSound', 'plotterVolume'];
 
 export default function App() {
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -30,6 +43,9 @@ export default function App() {
     bannerText: '¡Impresora continua de fotos en vivo TikTok!',
     drawOnLikes: true,
     likesThreshold: 1,
+    tierTriggers: DEFAULT_TIER_TRIGGERS,
+    plotterSound: 'pencil',
+    plotterVolume: 0.8,
   });
 
   const [activeDrawing, setActiveDrawing] = useState<DonorItem | null>(null);
@@ -43,7 +59,11 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [totalLikesCount, setTotalLikesCount] = useState<number>(0);
 
-  const printedMembers = useRef<Set<string>>(new Set());
+  const likeBuckets = useRef<
+    Record<string, { count: number; avatarUrl: string; displayName: string; timer?: ReturnType<typeof setTimeout> }>
+  >({});
+  const triggersRef = useRef<TierTriggers>(settings.tierTriggers);
+  triggersRef.current = settings.tierTriggers;
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
   const [isObsGuideModalOpen, setIsObsGuideModalOpen] = useState<boolean>(false);
@@ -52,11 +72,34 @@ export default function App() {
   useEffect(() => {
     soundEngine.setEnabled(settings.soundEnabled);
     soundEngine.setVolume(settings.soundVolume);
-  }, [settings.soundEnabled, settings.soundVolume]);
+    soundEngine.setPlotterSound(settings.plotterSound);
+    soundEngine.setPlotterVolume(settings.plotterVolume);
+  }, [settings.soundEnabled, settings.soundVolume, settings.plotterSound, settings.plotterVolume]);
 
   const updateSettings = (newSettings: Partial<StreamSettings>) => {
     setSettings((prev) => ({ ...prev, ...newSettings }));
+    const shared = Object.fromEntries(
+      Object.entries(newSettings).filter(([key]) => SHARED_SETTING_KEYS.includes(key as keyof StreamSettings))
+    );
+    if (Object.keys(shared).length > 0) {
+      // Share with the OBS overlay, which runs in a separate browser
+      fetch('/api/shared-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(shared),
+      }).catch(() => {});
+    }
   };
+
+  // Load the shared settings saved on the server (set from the panel)
+  useEffect(() => {
+    fetch('/api/shared-settings')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && typeof data === 'object') setSettings((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => {});
+  }, []);
 
   // Dispatch next item in queue when current drawing finishes
   const processNextInQueue = useCallback(() => {
@@ -77,7 +120,9 @@ export default function App() {
       tier: GiftTier,
       customName?: string,
       customAvatar?: string,
-      customComment?: string
+      customComment?: string,
+      customIcon?: string,
+      customGiftName?: string
     ) => {
       const giftDef = PRESET_GIFTS.find((g) => g.tier === tier) || PRESET_GIFTS[0];
       const randomAvatar = PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)];
@@ -100,9 +145,9 @@ export default function App() {
         username: donorUsername,
         avatarUrl: customAvatar || randomAvatar.dataUrl,
         giftTier: tier,
-        giftName: giftDef.name,
+        giftName: customGiftName || triggerCaption(triggersRef.current[tier]),
         coins: giftDef.coins,
-        giftIcon: giftDef.icon,
+        giftIcon: customIcon || giftDef.icon,
         timestamp: Date.now(),
         comment: customComment,
         status: 'drawing',
@@ -218,6 +263,44 @@ export default function App() {
     setActiveDrawing(null);
   };
 
+  const triggerGiftRef = useRef(handleTriggerGift);
+  triggerGiftRef.current = handleTriggerGift;
+
+  // Accumulate a viewer's screen taps; once they pause, print the highest
+  // "likes" tier they reached (big > medium > small color > small B/N).
+  const LIKE_SETTLE_MS = 2500;
+  const registerLikes = useCallback(
+    (username: string, displayName: string, avatarUrl: string, count: number) => {
+      const key = (username || 'espectador').toLowerCase().trim();
+      const bucket = likeBuckets.current[key] || { count: 0, avatarUrl: '', displayName };
+      bucket.count += count;
+      if (avatarUrl) bucket.avatarUrl = avatarUrl;
+      if (displayName) bucket.displayName = displayName;
+      if (bucket.timer) clearTimeout(bucket.timer);
+
+      bucket.timer = setTimeout(() => {
+        const triggers = triggersRef.current;
+        const tier = TIER_PRIORITY.find(
+          (t) => triggers[t].mode === 'likes' && bucket.count >= triggers[t].likes
+        );
+        // Not enough taps for any tier yet: keep accumulating
+        if (!tier) return;
+        triggerGiftRef.current(
+          tier,
+          bucket.displayName,
+          bucket.avatarUrl || undefined,
+          `❤️ ${bucket.count} likes en pantalla`,
+          '❤️',
+          `${bucket.count} likes`
+        );
+        delete likeBuckets.current[key];
+      }, LIKE_SETTLE_MS);
+
+      likeBuckets.current[key] = bucket;
+    },
+    []
+  );
+
   // Real-time TikTok Live SSE (Server-Sent Events) listener
   useEffect(() => {
     let eventSource: EventSource | null = null;
@@ -233,7 +316,7 @@ export default function App() {
             setIsTikTokConnected(!!parsed.data?.isConnected);
             if (parsed.type === 'connected') {
               // Live started: wipe simulated/demo prints so only real viewers are printed
-              printedMembers.current.clear();
+              likeBuckets.current = {};
               handleClearQueue();
             }
             if (parsed.data?.lastError) {
@@ -241,23 +324,49 @@ export default function App() {
             } else if (parsed.data?.isConnected) {
               setConnectionError(null);
             }
+          } else if (parsed.type === 'shared-settings') {
+            if (parsed.data && typeof parsed.data === 'object') {
+              setSettings((prev) => ({ ...prev, ...parsed.data }));
+            }
           } else if (parsed.type === 'disconnected') {
             setIsTikTokConnected(false);
           } else if (parsed.type === 'error') {
             setConnectionError(parsed.data?.error || 'Error de conexión con TikTok Live');
             setIsTikTokConnected(false);
-          } else if (parsed.type === 'member') {
-            // REAL VIEWER JOINED THE LIVE: print their profile photo and name once
-            const member = parsed.data;
-            const key = (member.username || '').toLowerCase();
-            if (!member.avatarUrl || !key || printedMembers.current.has(key)) return;
-            printedMembers.current.add(key);
-            handleTriggerGift(
-              'heart',
-              member.nickname || member.username,
-              member.avatarUrl,
-              '👋 Entró al live'
+          } else if (parsed.type === 'gift') {
+            // REAL GIFT: print on the highest-priority tier configured for this gift
+            const gift = parsed.data;
+            const triggers = triggersRef.current;
+            const tier = TIER_PRIORITY.find(
+              (t) =>
+                triggers[t].mode === 'gift' &&
+                triggers[t].giftName.toLowerCase() === (gift.giftName || '').toLowerCase()
             );
+            if (!tier) return;
+            const def = findTikTokGift(gift.giftName);
+            handleTriggerGift(
+              tier,
+              gift.nickname || gift.username,
+              gift.avatarUrl,
+              `${def?.icon || '🎁'} ${def?.label || gift.giftName} (x${gift.repeatCount || 1})`,
+              def?.icon
+            );
+          } else if (parsed.type === 'chat') {
+            // REAL CHAT: only the B/N tier can be triggered by a keyword
+            const chat = parsed.data;
+            const trigger = triggersRef.current.heart;
+            const keyword = trigger.text.trim().toLowerCase();
+            const comment = (chat.comment || '').trim().toLowerCase();
+            if (trigger.mode !== 'text' || !keyword) return;
+            if (comment === keyword || comment.startsWith(`${keyword} `)) {
+              handleTriggerGift(
+                'heart',
+                chat.displayName || chat.uniqueId,
+                chat.avatarUrl,
+                `💬 Escribió "${chat.comment}"`,
+                '💬'
+              );
+            }
           } else if (parsed.type === 'like') {
             // REAL TIKTOK LIVE LIKES (Me Gusta / Corazones flotantes ❤️)
             const likeData = parsed.data;
@@ -266,6 +375,12 @@ export default function App() {
             } else {
               setTotalLikesCount((prev) => prev + (likeData.likeCount || 1));
             }
+            registerLikes(
+              likeData.username,
+              likeData.nickname || likeData.username,
+              likeData.avatarUrl,
+              likeData.likeCount || 1
+            );
           }
         } catch (e) {
           console.error('Error procesando evento TikTok:', e);
@@ -399,12 +514,7 @@ export default function App() {
     const randomAvatar = PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)];
     const sampleNames = ['carlos_live', 'sofia_star', 'ana_taps', 'mateo_tiktok', 'lucia_fans'];
     const randomName = sampleNames[Math.floor(Math.random() * sampleNames.length)];
-    handleTriggerGift(
-      'heart',
-      randomName,
-      randomAvatar.dataUrl,
-      `❤️ ${count} likes en pantalla`
-    );
+    registerLikes(randomName, randomName, randomAvatar.dataUrl, count);
   };
 
 
@@ -431,6 +541,7 @@ export default function App() {
           onDrawingComplete={handleDrawingComplete}
           completedRows={completedRows}
           obsMode={true}
+          tierTriggers={settings.tierTriggers}
         />
       </div>
     );
@@ -488,6 +599,7 @@ export default function App() {
                 onDrawingComplete={handleDrawingComplete}
                 completedRows={completedRows}
                 obsMode={settings.obsMode}
+                tierTriggers={settings.tierTriggers}
               />
             </section>
 
