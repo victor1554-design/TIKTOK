@@ -43,7 +43,7 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [totalLikesCount, setTotalLikesCount] = useState<number>(0);
 
-  const userLikesAccumulator = useRef<Record<string, { count: number; avatarUrl: string; displayName: string }>>({});
+  const printedMembers = useRef<Set<string>>(new Set());
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
   const [isObsGuideModalOpen, setIsObsGuideModalOpen] = useState<boolean>(false);
@@ -231,6 +231,11 @@ export default function App() {
           const parsed = JSON.parse(event.data);
           if (parsed.type === 'status' || parsed.type === 'connected') {
             setIsTikTokConnected(!!parsed.data?.isConnected);
+            if (parsed.type === 'connected') {
+              // Live started: wipe simulated/demo prints so only real viewers are printed
+              printedMembers.current.clear();
+              handleClearQueue();
+            }
             if (parsed.data?.lastError) {
               setConnectionError(parsed.data.lastError);
             } else if (parsed.data?.isConnected) {
@@ -241,27 +246,18 @@ export default function App() {
           } else if (parsed.type === 'error') {
             setConnectionError(parsed.data?.error || 'Error de conexión con TikTok Live');
             setIsTikTokConnected(false);
-          } else if (parsed.type === 'gift') {
-            // REAL TIKTOK LIVE GIFT RECEIVED!
-            const gift = parsed.data;
+          } else if (parsed.type === 'member') {
+            // REAL VIEWER JOINED THE LIVE: print their profile photo and name once
+            const member = parsed.data;
+            const key = (member.username || '').toLowerCase();
+            if (!member.avatarUrl || !key || printedMembers.current.has(key)) return;
+            printedMembers.current.add(key);
             handleTriggerGift(
-              gift.giftTier,
-              gift.username,
-              gift.avatarUrl,
-              `${gift.giftName} (x${gift.repeatCount || 1})`
+              'heart',
+              member.nickname || member.username,
+              member.avatarUrl,
+              '👋 Entró al live'
             );
-          } else if (parsed.type === 'chat') {
-            // REAL TIKTOK LIVE CHAT MESSAGE (e.g. "yo")
-            const chat = parsed.data;
-            const comment = (chat.comment || '').trim().toLowerCase();
-            if (chat.isYo || comment === 'yo' || comment === 'y' || comment.startsWith('yo ')) {
-              handleTriggerGift(
-                'heart',
-                chat.displayName || chat.uniqueId,
-                chat.avatarUrl,
-                `💬 Escribió "${chat.comment}" en el chat`
-              );
-            }
           } else if (parsed.type === 'like') {
             // REAL TIKTOK LIVE LIKES (Me Gusta / Corazones flotantes ❤️)
             const likeData = parsed.data;
@@ -269,37 +265,6 @@ export default function App() {
               setTotalLikesCount(likeData.totalLikes);
             } else {
               setTotalLikesCount((prev) => prev + (likeData.likeCount || 1));
-            }
-
-            // If drawing on screen likes is enabled
-            if (settings.drawOnLikes !== false) {
-              const userKey = (likeData.username || 'espectador').toLowerCase().trim();
-              const userAcc = userLikesAccumulator.current[userKey] || {
-                count: 0,
-                avatarUrl: likeData.avatarUrl || '',
-                displayName: likeData.nickname || likeData.username || 'Espectador',
-              };
-
-              userAcc.count += likeData.likeCount || 1;
-              if (likeData.avatarUrl) userAcc.avatarUrl = likeData.avatarUrl;
-              if (likeData.nickname) userAcc.displayName = likeData.nickname;
-              userLikesAccumulator.current[userKey] = userAcc;
-
-              const threshold = settings.likesThreshold || 10;
-              if (userAcc.count >= threshold) {
-                // Reached target likes threshold! Add to drawing queue in B&N Heart tier
-                handleTriggerGift(
-                  'heart',
-                  userAcc.displayName || likeData.username,
-                  userAcc.avatarUrl,
-                  `❤️ ${userAcc.count} likes en pantalla`
-                );
-                // Reset this user's counter so they can tap again
-                userLikesAccumulator.current[userKey] = {
-                  ...userAcc,
-                  count: 0,
-                };
-              }
             }
           }
         } catch (e) {
@@ -319,7 +284,7 @@ export default function App() {
       if (eventSource) eventSource.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, [handleTriggerGift, settings.drawOnLikes, settings.likesThreshold]);
+  }, [handleTriggerGift]);
 
   // Connect or disconnect from real TikTok Live stream
   const handleToggleTikTokConnection = async () => {

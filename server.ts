@@ -178,7 +178,10 @@ async function startServer() {
 
       const conn: any = new TikTokLiveConnection(username, {
         processInitialData: false,
-        enableExtendedGiftInfo: true,
+        // enableExtendedGiftInfo fetches gift/list/ through a signed EulerStream request,
+        // which requires a paid Business plan. Gift events still include name/diamonds.
+        enableExtendedGiftInfo: false,
+        ...(process.env.SIGN_API_KEY ? { signApiKey: process.env.SIGN_API_KEY } : {}),
       });
 
       conn.on('connected', (state: any) => {
@@ -245,6 +248,34 @@ async function startServer() {
         };
 
         broadcastSSE('chat', chatEvent);
+      });
+
+      // Capture viewers joining the live (used to print their profile photo)
+      conn.on(WebcastEvent.MEMBER || 'member', (data: any) => {
+        const u = data.user || data;
+        const rawAvatar =
+          u.profilePictureUrl ||
+          u.profilePicture?.url?.[0] ||
+          u.avatarLarge?.urlList?.[0] ||
+          u.avatarMedium?.urlList?.[0] ||
+          u.avatarThumb?.urlList?.[0] ||
+          u.profilePictureUrls?.[0] ||
+          data.profilePictureUrl ||
+          '';
+
+        const safeAvatar = rawAvatar
+          ? `/api/proxy-image?url=${encodeURIComponent(rawAvatar)}`
+          : '';
+
+        const memberEvent = {
+          id: `member_${data.msgId || Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          username: (u.uniqueId || u.nickname || data.uniqueId || 'espectador').toLowerCase().trim(),
+          nickname: u.nickname || u.uniqueId || data.nickname || 'Espectador',
+          avatarUrl: safeAvatar,
+          timestamp: Date.now(),
+        };
+
+        broadcastSSE('member', memberEvent);
       });
 
       // Capture real TikTok Live likes (screen tap hearts ❤️)
